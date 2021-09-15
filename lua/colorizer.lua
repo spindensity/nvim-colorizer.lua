@@ -65,6 +65,7 @@ local DEFAULT_OPTIONS = {
 	css_fn   = false;        -- Enable all CSS *functions*: rgb_fn, hsl_fn
 	-- Available modes: foreground, background
 	mode     = 'background'; -- Set the display mode.
+	lowercase = false; -- Enable lowercase "Name" codes
 }
 
 -- -- TODO use rgb as the return value from the matcher functions
@@ -109,10 +110,11 @@ end
 local function byte_is_hex(byte)
 	return band(BYTE_CATEGORY[byte], CATEGORY_HEX) ~= 0
 end
-
+local function byte_is_alpha(byte)
+	return band(BYTE_CATEGORY[byte], CATEGORY_ALPHA) ~= 0
+end
 local function byte_is_alphanumeric(byte)
-	local category = BYTE_CATEGORY[byte]
-	return band(category, CATEGORY_ALPHANUM) ~= 0
+	return band(BYTE_CATEGORY[byte], CATEGORY_ALPHANUM) ~= 0
 end
 
 local function parse_hex(b)
@@ -167,11 +169,16 @@ local function hsl_to_rgb(h, s, l)
 	return 255*hue_to_rgb(p, q, h + 1/3), 255*hue_to_rgb(p, q, h), 255*hue_to_rgb(p, q, h - 1/3)
 end
 
-local function color_name_parser(line, i)
+local function color_name_parser(line, i, allow_lowercase)
 	if i > 1 and byte_is_alphanumeric(line:byte(i-1)) then
 		return
 	end
 	if #line < i + COLOR_NAME_MINLEN - 1 then return end
+	if not allow_lowercase then
+		local b = line:byte(i)
+		-- This means it's lowercase.
+		if byte_is_alpha(b) and b >= 0x61 then return end
+	end
 	local prefix = COLOR_TRIE:longest_prefix(line, i)
 	if prefix then
 		-- Check if there is a letter here so as to disallow matching here.
@@ -379,14 +386,15 @@ local function make_matcher(options)
 	local enable_RRGGBBAA = options.css or options.RRGGBBAA
 	local enable_rgb      = options.css or options.css_fns or options.rgb_fn
 	local enable_hsl      = options.css or options.css_fns or options.hsl_fn
-
+	local enable_lowercase = options.css or options.lowercase
 	local matcher_key = bor(
 		lshift(enable_names    and 1 or 0, 0),
 		lshift(enable_RGB      and 1 or 0, 1),
 		lshift(enable_RRGGBB   and 1 or 0, 2),
 		lshift(enable_RRGGBBAA and 1 or 0, 3),
 		lshift(enable_rgb      and 1 or 0, 4),
-		lshift(enable_hsl      and 1 or 0, 5))
+		lshift(enable_hsl      and 1 or 0, 5),
+		lshift(enable_lowercase and 1 or 0, 6))
 
 	if matcher_key == 0 then return end
 
@@ -397,7 +405,9 @@ local function make_matcher(options)
 
 	local loop_matchers = {}
 	if enable_names then
-		table.insert(loop_matchers, color_name_parser)
+		table.insert(loop_matchers, function(line, i)
+			return color_name_parser(line, i, enable_lowercase)
+		end)
 	end
 	do
 		local valid_lengths = {[3] = enable_RGB, [6] = enable_RRGGBB, [8] = enable_RRGGBBAA}
@@ -575,7 +585,7 @@ local function setup(filetypes, user_default_options)
 		exclusions = {};
 		default_options = merge(DEFAULT_OPTIONS, user_default_options or {});
 	}
-	-- Initialize this AFTER setting COLOR_NAME_SETTINGS
+    COLOR_NAME_SETTINGS.lowercase = SETUP_SETTINGS.default_options.lowercase
 	initialize_trie()
 	function COLORIZER_SETUP_HOOK()
 		local filetype = nvim.bo.filetype
